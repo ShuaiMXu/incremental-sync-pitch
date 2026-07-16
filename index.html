@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>为什么要做「增量同步」升级 · Design Wiki</title>
+  <style>
+    @font-face { font-family: "JD ZhengHei"; src: url("./fonts/JDZhengHeiV2-Regular.otf") format("opentype"); font-weight: 400; font-display: swap; }
+    @font-face { font-family: "JD ZhengHei"; src: url("./fonts/JDZhengHeiV2-Bold.otf") format("opentype"); font-weight: 700; font-display: swap; }
+    @font-face { font-family: "JD ZhengHei"; src: url("./fonts/JDZhengHeiV2-Heavy.otf") format("opentype"); font-weight: 800; font-display: swap; }
+    @font-face { font-family: "JD ZhengHei"; src: url("./fonts/JDZhengHeiV2-Light.otf") format("opentype"); font-weight: 300; font-display: swap; }
+    :root {
+      --c-title: #171a26; --c-text: #3d414d; --c-help: #828794; --c-disabled: #c2c4cc;
+      --c-line: rgba(0,0,0,0.08); --c-bg-page: #f2f3f7; --c-bg: #ffffff; --c-sunken: #f5f6fa;
+      --c-brand: #ff0f23; --c-brand-pressed: #e53029; --c-brand-light: #fff0f4; --c-brand-light-pressed: #ffd6e1;
+      --c-on-brand: #ffffff;
+      --c-service: #b5691a; --c-service-bg: #fff4e8; --c-service-line: rgba(181,105,26,0.20);
+      --c-success: #00d900; --c-success-bg: #ebfbeb; --c-success-text: #2aa32a;
+      --c-error: #ff0f23; --c-error-bg: #fff0f4;
+      --c-warning: #ffbf00; --c-warning-bg: #fff9e0; --c-warning-text: #b26b00;
+      --c-info: #0073ff; --c-info-bg: #e5f5ff;
+      --r-base: 6px; --r-card: 8px; --shadow-glass: 0 18px 48px rgba(23,26,38,0.10);
+      --font-brand: "JD ZhengHei", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+      --font-body: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+      font-family: var(--font-body);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--c-title); background: var(--c-bg-page); overflow: hidden; }
+    .deck { width: 100vw; height: 100vh; display: flex; transition: transform .36s ease; }
+    .slide { position: relative; flex: 0 0 100vw; height: 100vh; padding: 5.4vh 6.2vw 6vh; background: var(--c-bg); overflow: hidden; }
+    .slide::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 6px; background: var(--c-brand); }
+    .topbar { position: relative; display: flex; align-items: center; justify-content: space-between; margin-bottom: 40px; color: var(--c-help); font-size: 15px; }
+    .brand-lockup { display: flex; align-items: center; gap: 12px; font-family: var(--font-brand); font-weight: 700; color: var(--c-title); }
+    .brand-mark { width: 38px; height: 22px; border-radius: var(--r-base); background: var(--c-brand); color: var(--c-on-brand); display: grid; place-items: center; font-size: 13px; }
+    .kicker { color: var(--c-brand); font-family: var(--font-brand); font-size: 15px; font-weight: 700; margin-bottom: 14px; }
+    h1, h2 { margin: 0; letter-spacing: 0; line-height: 1.06; }
+    h1, h2, .metric { font-family: var(--font-brand); }
+    h1 { font-size: 68px; font-weight: 800; max-width: 900px; }
+    h2 { font-size: 48px; font-weight: 800; max-width: 1180px; }
+    p { margin: 0; color: var(--c-text); font-size: 24px; line-height: 1.55; }
+    .lead { margin-top: 24px; max-width: 900px; font-size: 29px; color: var(--c-text); }
+    .footer { position: absolute; left: 6.2vw; right: 6.2vw; bottom: 3vh; display: flex; justify-content: space-between; color: var(--c-help); font-size: 14px; border-top: 1px solid var(--c-line); padding-top: 12px; }
+
+    /* cover */
+    .cover-grid { display: grid; grid-template-columns: minmax(0,1fr) 460px; gap: 54px; align-items: center; min-height: 640px; }
+    .cover-copy { min-width: 0; }
+    .cover-visual { border-radius: var(--r-card); background: var(--c-sunken); border: 1px solid var(--c-line); padding: 30px; display: grid; grid-template-rows: auto auto auto; gap: 16px; }
+    .cv-row { display: flex; align-items: center; gap: 16px; padding: 18px 20px; border-radius: var(--r-base); background: var(--c-bg); border: 1px solid var(--c-line); }
+    .cv-row .dot { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; font-size: 20px; flex: 0 0 40px; }
+    .cv-row .tx { font-size: 20px; }
+    .cv-row .tx b { font-family: var(--font-brand); font-size: 21px; display: block; }
+    .cv-row .tx span { color: var(--c-help); font-size: 17px; }
+    .cv-old .dot { background: var(--c-error-bg); color: var(--c-brand); }
+    .cv-new .dot { background: var(--c-success-bg); color: var(--c-success-text); }
+    .cv-arrow { text-align: center; color: var(--c-help); font-size: 22px; }
+
+    /* summary 3-grid */
+    .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 44px; }
+    .panel { position: relative; border: 1px solid var(--c-line); border-radius: var(--r-card); padding: 30px; background: var(--c-bg); min-height: 300px; overflow: hidden; }
+    .panel.is-featured { box-shadow: var(--shadow-glass); }
+    .panel::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 4px; background: var(--c-brand); }
+    .panel .tag { font-family: var(--font-brand); font-size: 15px; font-weight: 700; color: var(--c-brand); margin-bottom: 16px; }
+    .panel strong { display: block; font-size: 27px; line-height: 1.24; margin-bottom: 14px; font-family: var(--font-brand); }
+    .panel p { font-size: 20px; }
+
+    /* before/after */
+    .two-col { display: grid; grid-template-columns: 1fr 64px 1fr; gap: 0; margin-top: 40px; align-items: stretch; }
+    .col { border-radius: var(--r-card); padding: 32px; border: 1px solid var(--c-line); }
+    .col.before { background: var(--c-sunken); }
+    .col.after { background: var(--c-brand-light); border-color: var(--c-brand-light-pressed); }
+    .col h3 { margin: 0 0 20px; font-family: var(--font-brand); font-size: 26px; display: flex; align-items: center; gap: 12px; }
+    .col.before h3 { color: var(--c-help); }
+    .col.after h3 { color: var(--c-brand); }
+    .col .badge { font-size: 15px; font-weight: 700; padding: 4px 12px; border-radius: 20px; }
+    .col.before .badge { background: var(--c-sunken); color: var(--c-help); border: 1px solid var(--c-line); }
+    .col.after .badge { background: var(--c-brand); color: var(--c-on-brand); }
+    .col ul { margin: 0; padding: 0; list-style: none; }
+    .col li { position: relative; padding: 14px 0 14px 34px; font-size: 21px; line-height: 1.45; border-bottom: 1px solid var(--c-line); color: var(--c-text); }
+    .col li:last-child { border-bottom: none; }
+    .col li::before { position: absolute; left: 0; top: 14px; font-size: 20px; }
+    .col.before li::before { content: "✕"; color: var(--c-brand); }
+    .col.after li::before { content: "✓"; color: var(--c-success-text); }
+    .arrow-mid { display: grid; place-items: center; color: var(--c-brand); font-size: 40px; font-family: var(--font-brand); }
+
+    /* analogy split */
+    .analogy { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; margin-top: 36px; align-items: stretch; }
+    .ana-card { border-radius: var(--r-card); border: 1px solid var(--c-line); padding: 30px; background: var(--c-bg); }
+    .ana-card.life { background: var(--c-service-bg); border-color: var(--c-service-line); }
+    .ana-card .h { font-family: var(--font-brand); font-size: 22px; font-weight: 800; margin-bottom: 18px; display: flex; align-items: center; gap: 12px; }
+    .ana-card.life .h { color: var(--c-service); }
+    .ana-card.tech .h { color: var(--c-title); }
+    .ana-emoji { font-size: 30px; }
+    .ana-card p { font-size: 21px; margin-bottom: 14px; }
+    .ana-card p:last-child { margin-bottom: 0; }
+    .ana-card .hl { color: var(--c-title); font-family: var(--font-brand); font-weight: 700; }
+    .callout { margin-top: 30px; border-left: 5px solid var(--c-brand); background: var(--c-sunken); padding: 22px 28px; border-radius: var(--r-base); font-size: 23px; color: var(--c-title); }
+    .callout b { font-family: var(--font-brand); color: var(--c-brand); }
+
+    /* marker-block visual */
+    .doc-mock { margin-top: 34px; display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+    .doc { border-radius: var(--r-card); border: 1px solid var(--c-line); overflow: hidden; background: var(--c-bg); }
+    .doc .dhead { padding: 14px 22px; font-family: var(--font-brand); font-weight: 700; font-size: 18px; color: var(--c-help); background: var(--c-sunken); border-bottom: 1px solid var(--c-line); }
+    .doc .zone { padding: 20px 22px; font-size: 19px; line-height: 1.5; }
+    .doc .zone.auto { background: var(--c-info-bg); border-left: 5px solid var(--c-info); }
+    .doc .zone.manual { background: var(--c-success-bg); border-left: 5px solid var(--c-success-text); }
+    .doc .zone .zlabel { font-family: var(--font-brand); font-weight: 700; font-size: 15px; margin-bottom: 8px; display: block; }
+    .doc .zone.auto .zlabel { color: var(--c-info); }
+    .doc .zone.manual .zlabel { color: var(--c-success-text); }
+    .doc .zline { height: 11px; border-radius: 6px; background: rgba(0,0,0,0.10); margin: 8px 0; }
+    .doc .zline.s { width: 60%; }
+
+    /* kpi strip */
+    .kpi-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 48px; }
+    .kpi { border: 1px solid var(--c-line); border-radius: var(--r-card); padding: 34px 30px; background: var(--c-bg); position: relative; }
+    .kpi::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--c-brand); }
+    .metric { font-size: 76px; line-height: 1; font-weight: 800; color: var(--c-brand); margin-bottom: 12px; }
+    .kpi .klabel { font-size: 21px; color: var(--c-text); line-height: 1.4; }
+    .kpi .ksub { font-size: 16px; color: var(--c-help); margin-top: 8px; }
+
+    /* roadmap */
+    .lane { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 48px; }
+    .step { min-height: 320px; padding: 30px; border: 1px solid var(--c-line); border-radius: var(--r-card); background: var(--c-bg); }
+    .step:nth-child(2) { background: var(--c-sunken); }
+    .step .num { width: 46px; height: 46px; border-radius: 50%; background: var(--c-brand-light); color: var(--c-brand); font-family: var(--font-brand); font-weight: 800; font-size: 20px; display: grid; place-items: center; margin-bottom: 24px; }
+    .step .stitle { font-family: var(--font-brand); font-size: 24px; font-weight: 800; margin-bottom: 8px; }
+    .step .swhen { font-size: 15px; color: var(--c-brand); font-weight: 700; margin-bottom: 16px; }
+    .step p { font-size: 19px; }
+    .step .sout { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--c-line); font-size: 17px; color: var(--c-help); }
+
+    .controls { position: fixed; z-index: 10; right: 22px; bottom: 18px; display: flex; gap: 8px; }
+    button { width: 38px; height: 38px; border: 1px solid var(--c-line); border-radius: var(--r-base); background: var(--c-bg); color: var(--c-title); font-size: 18px; cursor: pointer; }
+    button:hover { border-color: var(--c-brand); color: var(--c-brand); }
+    .pageno { position: fixed; left: 22px; bottom: 20px; z-index: 10; color: var(--c-help); font-size: 14px; font-family: var(--font-brand); }
+
+    /* what-is openwiki */
+    .whatis { display: grid; grid-template-columns: 380px 1fr; gap: 40px; margin-top: 36px; align-items: start; }
+    .ow-card { border-radius: var(--r-card); border: 1px solid var(--c-line); background: var(--c-sunken); padding: 34px; }
+    .ow-logo { font-family: var(--font-brand); font-weight: 800; font-size: 30px; color: var(--c-title); margin-bottom: 6px; }
+    .ow-by { font-size: 17px; color: var(--c-help); margin-bottom: 22px; }
+    .ow-stat { display: flex; align-items: baseline; gap: 10px; padding: 14px 0; border-top: 1px solid var(--c-line); }
+    .ow-stat b { font-family: var(--font-brand); font-weight: 800; font-size: 30px; color: var(--c-brand); }
+    .ow-stat span { font-size: 18px; color: var(--c-text); }
+    .ow-right p.big { font-size: 27px; color: var(--c-title); font-family: var(--font-brand); font-weight: 700; line-height: 1.4; margin-bottom: 22px; }
+    .ow-points { display: grid; gap: 14px; }
+    .ow-pt { display: flex; gap: 14px; align-items: flex-start; padding: 18px 22px; border-radius: var(--r-base); background: var(--c-bg); border: 1px solid var(--c-line); }
+    .ow-pt .k { font-family: var(--font-brand); font-weight: 800; color: var(--c-brand); font-size: 19px; flex: 0 0 auto; }
+    .ow-pt .v { font-size: 20px; color: var(--c-text); line-height: 1.45; }
+    .ow-pt .v b { color: var(--c-title); font-family: var(--font-brand); }
+
+    /* terminal / CLI mockup — 暗色终端复用 JD 允许基色 */
+    .term { border-radius: var(--r-card); overflow: hidden; border: 1px solid var(--c-line); background: #171a26; box-shadow: var(--shadow-glass); }
+    .term-bar { display: flex; align-items: center; gap: 8px; padding: 12px 18px; background: #3d414d; border-bottom: 1px solid rgba(255,255,255,0.08); }
+    .term-bar i { width: 12px; height: 12px; border-radius: 50%; display: block; }
+    .term-bar i:nth-child(1){ background:#ff0f23;} .term-bar i:nth-child(2){ background:#ffbf00;} .term-bar i:nth-child(3){ background:#00d900;}
+    .term-bar span { margin-left: 12px; color: #c2c4cc; font-size: 14px; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+    .term-body { padding: 26px 28px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 21px; line-height: 1.85; color: #ffffff; }
+    .term-body .cmd { color: #ffffff; }
+    .term-body .cmd::before { content: "$ "; color: var(--c-brand); font-weight: 700; }
+    .term-body .out { color: #c2c4cc; }
+    .term-body .out b { color: #00d900; font-weight: 400; }
+    .term-body .hl { color: #ffbf00; }
+    .term-body .row { margin-bottom: 16px; }
+    .term-body .row:last-child { margin-bottom: 0; }
+
+    /* 3-channel diagram */
+    .hub { display: grid; grid-template-columns: 300px 1fr; gap: 40px; margin-top: 36px; align-items: center; }
+    .hub-core { border-radius: var(--r-card); background: var(--c-brand-light); border: 2px solid var(--c-brand); padding: 40px 30px; text-align: center; }
+    .hub-core .hc-t { font-family: var(--font-brand); font-weight: 800; font-size: 30px; color: var(--c-brand); margin-bottom: 10px; }
+    .hub-core .hc-s { font-size: 18px; color: var(--c-text); }
+    .hub-chans { display: grid; gap: 16px; }
+    .chan { display: grid; grid-template-columns: 56px 1fr auto; gap: 20px; align-items: center; padding: 22px 26px; border-radius: var(--r-card); background: var(--c-bg); border: 1px solid var(--c-line); position: relative; }
+    .chan::before { content: "→"; position: absolute; left: -30px; color: var(--c-brand); font-size: 24px; font-family: var(--font-brand); }
+    .chan .ico { width: 56px; height: 56px; border-radius: var(--r-base); background: var(--c-sunken); display: grid; place-items: center; font-size: 28px; }
+    .chan .ct { font-family: var(--font-brand); font-weight: 800; font-size: 23px; margin-bottom: 4px; }
+    .chan .cd { font-size: 18px; color: var(--c-help); }
+    .chan .who { font-size: 15px; font-weight: 700; color: var(--c-brand); font-family: var(--font-brand); background: var(--c-brand-light); padding: 6px 14px; border-radius: 20px; white-space: nowrap; }
+  </style>
+
+
+</head>
+<body>
+  <main class="deck" id="deck">
+
+    <!-- 01 封面 -->
+    <section class="slide" data-layout="cover-field">
+      <div class="topbar">
+        <div class="brand-lockup"><span class="brand-mark">JD</span><span>DESIGN WIKI · 内部宣讲</span></div>
+        <span>16.0 设计系统 / 设计与用研部 / 2026-07</span>
+      </div>
+      <div class="cover-grid">
+        <div class="cover-copy">
+          <div class="kicker">为什么要升级</div>
+          <h1>内容都建好了，<br>下一步是让它「调得动」</h1>
+          <p class="lead">2200+ 篇规范、140+ 个 skill 已经沉淀在库里。缺的不是内容，是一个让人、AI、工具都能随时调出来用的「调用层」。</p>
+        </div>
+        <div class="cover-visual">
+          <div class="cv-row cv-old"><div class="dot">✕</div><div class="tx"><b>今天</b><span>内容很厚，但躺在库里，不知道怎么调</span></div></div>
+          <div class="cv-arrow">↓ 升级 ↓</div>
+          <div class="cv-row cv-new"><div class="dot">✓</div><div class="tx"><b>升级后</b><span>一句话就能调出规范，AI 画稿自动引用</span></div></div>
+        </div>
+      </div>
+      <div class="footer"><span>Design Wiki · 从「建好」到「用起来」</span><span>01</span></div>
+    </section>
+
+    <!-- 02 家底 -->
+    <section class="slide" data-layout="kpi-strip">
+      <div class="topbar">
+        <div class="brand-lockup"><span class="brand-mark">JD</span><span>先看我们的家底</span></div>
+        <span>02 / 09</span>
+      </div>
+      <div class="kicker">这两年沉淀了多少</div>
+      <h2>内容早已成规模——这正是「调用层」的价值前提</h2>
+      <div class="kpi-strip">
+        <div class="kpi">
+          <div class="metric">2200<span style="font-size:38px">+</span></div>
+          <div class="klabel">篇设计规范文档</div>
+          <div class="ksub">含 340 篇核心组件 + bundle 五件套</div>
+        </div>
+        <div class="kpi">
+          <div class="metric">140<span style="font-size:38px">+</span></div>
+          <div class="klabel">个 skill 工具</div>
+          <div class="ksub">26 中枢 + 114 业务线自建（黄流/本地生活/用研…）</div>
+        </div>
+        <div class="kpi">
+          <div class="metric">4000<span style="font-size:38px">≈</span></div>
+          <div class="klabel">张图标 / 切图 / 资产</div>
+          <div class="ksub">token、组件、场域规范全覆盖</div>
+        </div>
+      </div>
+      <div class="callout" style="margin-top:36px">家底越厚，「调不动」的浪费就越大——<b>建，我们已经做到了；用，还差一层。</b></div>
+      <div class="footer"><span>数据来自当前仓库实际统计</span><span>02</span></div>
+    </section>
+
+    <!-- 03 痛点：调不动 -->
+    <section class="slide" data-layout="anatomy-system">
+      <div class="topbar">
+        <div class="brand-lockup"><span class="brand-mark">JD</span><span>问题在哪</span></div>
+        <span>03 / 09</span>
+      </div>
+      <div class="kicker">核心问题</div>
+      <h2>不是没内容，是「内容调不动」</h2>
+      <div class="ow-points" style="margin-top:34px">
+        <div class="ow-pt"><span class="k">01</span><span class="v"><b>内容做好了，却调不起来。</b>2200+ 篇 + 140+ skill 已沉淀，但没有一个统一的调用入口。</span></div>
+        <div class="ow-pt"><span class="k">02</span><span class="v"><b>大家不知道怎么调。</b>规范和 skill 散在各处，真要用时，没人说得清「该怎么把它调出来」。</span></div>
+        <div class="ow-pt"><span class="k">03</span><span class="v"><b>AI 也难引用。</b>agent 画稿、写代码时够不到 wiki，只能凭记忆重新描述规范——沉淀形同虚设。</span></div>
+        <div class="ow-pt"><span class="k">04</span><span class="v"><b>140+ skill 无法互相复用。</b>各自躺着，彼此调不到，外部工具链也集成不进来。</span></div>
+        <div class="ow-pt"><span class="k">05</span><span class="v"><b>沉淀 ≠ 被用。</b>重金投在「建」，却卡在「用」这一步，价值没兑现。</span></div>
+      </div>
+      <div class="footer"><span>一句话：内容已就位，缺的是「调用层」</span><span>03</span></div>
+    </section>
+
+    <!-- 04 什么是 CLI -->
+    <section class="slide" data-layout="anatomy-system">
+      <div class="topbar">
+        <div class="brand-lockup"><span class="brand-mark">JD</span><span>补个概念</span></div>
+        <span>04 / 09</span>
+      </div>
+      <div class="kicker">什么是 CLI</div>
+      <h2>一句话进、结果出的「命令行接口」</h2>
+      <div class="analogy" style="margin-top:32px">
+        <div class="ana-card life">
+          <div class="h"><span class="ana-emoji">⌨️</span>其实你早就在用</div>
+          <p>我们调 Relay 数据的 <span class="hl">zero</span>、京东的 <span class="hl">o2</span>，都是 CLI——在终端敲一句，它给你结构化结果。</p>
+          <p>和图形界面（点按钮）最大的不同：CLI <span class="hl">能被程序和 AI 自动调</span>，不用人守着点。</p>
+        </div>
+        <div class="ana-card tech">
+          <div class="h"><span class="ana-emoji">🔌</span>为什么它是「调用层」的底座</div>
+          <p>Relay 的能力，已经被 <span class="hl">zero 用 CLI 包起来</span>了——所以 AI 能一句话调设计稿数据。</p>
+          <p>同理，把 wiki 内容包成 <span class="hl">jdwiki</span> CLI，规范就能被一句话调出、被任何工具串起来。</p>
+        </div>
+      </div>
+      <div class="callout">京东已有先例：<b>o2-kb</b>（知识库 CLI，17 个子命令）、<b>zero</b>（Relay CLI）——我们不是发明，是照着成熟模式做。</div>
+      <div class="footer"><span>CLI = Command Line Interface · 人 / 程序 / AI 都能调</span><span>04</span></div>
+    </section>
+
+    <!-- 05 目标：一份内容三种口 -->
+    <section class="slide" data-layout="anatomy-system">
+      <div class="topbar">
+        <div class="brand-lockup"><span class="brand-mark">JD</span><span>解法</span></div>
+        <span>05 / 09</span>
+      </div>
+      <div class="kicker">怎么让它被调用</div>
+      <h2>一份 wiki 内容，包出三种「调用口」</h2>
+      <div class="hub">
+        <div class="hub-core">
+          <div class="hc-t">Design Wiki</div>
+          <div class="hc-s">2200+ 篇规范<br>140+ skill · 4000 资产</div>
+        </div>
+        <div class="hub-chans">
+          <div class="chan"><div class="ico">⌨️</div><div><div class="ct">CLI 封装</div><div class="cd">一句话调出规范、token、组件真值</div></div><div class="who">给人 / 程序</div></div>
+          <div class="chan"><div class="ico">🤖</div><div><div class="ct">MCP 接口</div><div class="cd">AI 画稿 / 写码时自动引用 wiki，不用人复制</div></div><div class="who">给 AI</div></div>
+          <div class="chan"><div class="ico">🔍</div><div><div class="ct">网页问答</div><div class="cd">design.html 门户里一句话查规范</div></div><div class="who">给设计师</div></div>
+        </div>
+      </div>
+      <div class="footer"><span>同一份内容，一次维护，三处可调</span><span>05</span></div>
+    </section>
+
+    <!-- 06 调用口 CLI + MCP -->
+    <section class="slide" data-layout="anatomy-system">
+      <div class="topbar">
+        <div class="brand-lockup"><span class="brand-mark">JD</span><span>调用口 · 一</span></div>
+        <span>06 / 09</span>
+      </div>
+      <div class="kicker">CLI + MCP · 给人和 AI 调</div>
+      <h2>一句话调出规范，AI 画稿自动引用</h2>
+      <div class="term" style="margin-top:32px">
+        <div class="term-bar"><i></i><i></i><i></i><span>jdwiki — 设计规范调用</span></div>
+        <div class="term-body">
+          <div class="row"><div class="cmd">jdwiki token color_primary</div><div class="out">→ <b>#ff0f23</b>　品牌主色 · Light/Dark 双态 · 出处：色彩Token</div></div>
+          <div class="row"><div class="cmd">jdwiki 查 圆角</div><div class="out">→ 7 阶：radius_xxs…xxl（0/2/4/6/8/12/16）· 按<span class="hl">单行高度</span>取值</div></div>
+          <div class="row"><div class="cmd">jdwiki 组件 底部导航栏</div><div class="out">→ 结构 / 变体 / 行为 / Donts · 附 bundle 链接</div></div>
+        </div>
+      </div>
+      <div class="callout" style="margin-top:26px">AI 侧同理：包成 MCP 后，Claude 画稿时<b>自动拉对规范真值</b>——不再凭记忆瞎猜、不用人工复制粘贴。</div>
+      <div class="footer"><span>命令为示意，最终以实现为准</span><span>06</span></div>
+    </section>
+
+    <!-- 07 调用口 网页问答 -->
+    <section class="slide" data-layout="compare-before-after">
+      <div class="topbar">
+        <div class="brand-lockup"><span class="brand-mark">JD</span><span>调用口 · 二</span></div>
+        <span>07 / 09</span>
+      </div>
+      <div class="kicker">网页问答 · 给设计师调</div>
+      <h2>门户从「只能翻」升级到「能问」</h2>
+      <div class="two-col">
+        <div class="col before">
+          <h3><span class="badge">今天</span>只读门户</h3>
+          <ul>
+            <li>design.html 只能一层层点开翻</li>
+            <li>想找「弹窗圆角多少」得自己定位到页</li>
+            <li>找到还要人工复制 token 值</li>
+            <li>页面是死的，不认识你在问什么</li>
+          </ul>
+        </div>
+        <div class="arrow-mid">➜</div>
+        <div class="col after">
+          <h3><span class="badge">升级后</span>可问门户</h3>
+          <ul>
+            <li>顶部一个输入框，直接问「弹窗圆角」</li>
+            <li>秒回真值 + 出处链接，可一键复制</li>
+            <li>背后就是同一个调用层，网页只是壳</li>
+            <li>设计师不用懂命令行，也能享受调用能力</li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer"><span>网页 / CLI / MCP 三口共享同一份内容与同一套调用逻辑</span><span>07</span></div>
+    </section>
+
+    <!-- 08 可信基座 -->
+    <section class="slide" data-layout="executive-summary">
+      <div class="topbar">
+        <div class="brand-lockup"><span class="brand-mark">JD</span><span>调得出，还得调得准</span></div>
+        <span>08 / 09</span>
+      </div>
+      <div class="kicker">调用层的底座 · 借鉴 OpenWiki</div>
+      <h2>调出来的，必须是新鲜、可信的内容</h2>
+      <div class="grid-3">
+        <div class="panel is-featured">
+          <div class="tag">机制 ①</div>
+          <strong>按版本增量保鲜</strong>
+          <p>每篇记住「照的是设计稿哪一版」，设计稿一变自动更新受影响的那部分——像手机 App 只下更新包。保证调出来的规范不过期。</p>
+        </div>
+        <div class="panel">
+          <div class="tag">机制 ②</div>
+          <strong>机器区 / 人工区分开</strong>
+          <p>脚本只改机器区，同事手写经验的人工区一个字不碰。内容敢补、越补越厚，调出来的东西才越来越全。</p>
+        </div>
+        <div class="panel">
+          <div class="tag">来源</div>
+          <strong>OpenWiki（LangChain 开源）</strong>
+          <p>1.1万+ 收藏的开源工具，思路正好治我们的痛。工具本身用不上（源头在 Zero），但这两个保鲜机制直接借鉴。</p>
+        </div>
+      </div>
+      <div class="footer"><span>调用层解决「用起来」，保鲜机制解决「用得准」</span><span>08</span></div>
+    </section>
+
+    <!-- 09 落地 -->
+    <section class="slide" data-layout="roadmap">
+      <div class="topbar">
+        <div class="brand-lockup"><span class="brand-mark">JD</span><span>怎么落地</span></div>
+        <span>09 / 09</span>
+      </div>
+      <div class="kicker">照成熟模式走，不重复造轮子</div>
+      <h2>先包一个 CLI 跑通，再长出三种口</h2>
+      <div class="lane">
+        <div class="step">
+          <div class="num">01</div>
+          <div class="stitle">先包 CLI</div>
+          <div class="swhen">第一步 · 打通调用</div>
+          <p>把查 token / 查规范 / 查组件封成 jdwiki 命令，复用 zero、o2-kb 的成熟模式，最小可用先跑通。</p>
+          <div class="sout">产出：一句话能调出规范真值</div>
+        </div>
+        <div class="step">
+          <div class="num">02</div>
+          <div class="stitle">接 MCP + 网页</div>
+          <div class="swhen">第二步 · 长出多口</div>
+          <p>同一套调用逻辑包成 MCP（AI 自动引用）、接进 design.html（网页问答），一份内容三处可调。</p>
+          <div class="sout">产出：人 / AI / 设计师都能调</div>
+        </div>
+        <div class="step">
+          <div class="num">03</div>
+          <div class="stitle">补保鲜基座</div>
+          <div class="swhen">第三步 · 保证可信</div>
+          <p>加增量保鲜 + 机器区/人工区分区，让调出来的内容始终新鲜、可信、越用越厚。</p>
+          <div class="sout">产出：调得动，也调得准</div>
+        </div>
+      </div>
+      <div class="footer"><span>下一步：先在核心 token / 组件规范上试点 jdwiki CLI</span><span>09</span></div>
+    </section>
+
+  </main>
+  <div class="pageno" id="pageno">01 / 07</div>
+  <div class="controls" aria-label="slide controls">
+    <button type="button" onclick="go(-1)" aria-label="previous">‹</button>
+    <button type="button" onclick="go(1)" aria-label="next">›</button>
+  </div>
+  <script>
+    const deck = document.getElementById('deck');
+    const pageno = document.getElementById('pageno');
+    let index = 0;
+    function render() {
+      const slides = [...document.querySelectorAll('.slide')];
+      deck.style.transform = `translateX(${-index * 100}vw)`;
+      const n = String(index + 1).padStart(2, '0');
+      const t = String(slides.length).padStart(2, '0');
+      pageno.textContent = `${n} / ${t}`;
+    }
+    function go(delta) {
+      const slides = [...document.querySelectorAll('.slide')];
+      index = Math.max(0, Math.min(slides.length - 1, index + delta));
+      render();
+    }
+    addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowRight' || e.key === ' ') go(1);
+      if (e.key === 'ArrowLeft') go(-1);
+    });
+    render();
+  </script>
+</body>
+</html>
